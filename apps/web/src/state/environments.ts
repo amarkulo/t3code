@@ -102,6 +102,18 @@ export function usePullRequestsSupported() {
   return useAtomValue(environmentSummaries.pullRequestsSupportedAtom);
 }
 
+// Module-level so the mapped atom stays stable across renders.
+const selectCatalogReady = (catalog: { readonly isReady: boolean }) => catalog.isReady;
+
+/** Whether the saved environment catalog has loaded, so an absent entry is really gone. */
+export function useEnvironmentCatalogReady(): boolean {
+  return useAtomValue(environmentCatalog.catalogValueAtom, selectCatalogReady);
+}
+
+export function useEnvironmentConnectionSummaries() {
+  return useAtomValue(environmentSummaries.environmentsAtom);
+}
+
 export function useEnvironmentMachines() {
   return useAtomValue(environmentSummaries.machineByIdAtom);
 }

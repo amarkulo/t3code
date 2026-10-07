@@ -144,6 +144,8 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import {
+  useEnvironmentCatalogReady,
+  useEnvironmentConnectionSummaries,
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
   useEnvironmentMachines,
@@ -184,9 +186,11 @@ import {
   filterSidebarV2VisibleThreads,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
+  buildSidebarEnvironmentScopeOptions,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
   formatWorkingDurationLabel,
+  narrowSidebarProjectGroupsToEnvironment,
   firstValidTimestampMs,
   hasUnseenCompletion,
   isSidebarNestedLinkClick,
@@ -272,6 +276,7 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { SidebarEnvironmentSelect } from "./sidebar/SidebarEnvironmentSelect";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -962,6 +967,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   scopedProjectKeys: ReadonlySet<string> | null;
+  scopedEnvironmentId: EnvironmentId | null;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
   onDraftContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
@@ -1002,6 +1008,12 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
         continue;
       }
       if (
+        props.scopedEnvironmentId !== null &&
+        session.environmentId !== props.scopedEnvironmentId
+      ) {
+        continue;
+      }
+      if (
         props.scopedProjectKeys !== null &&
         !props.scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
       ) {
@@ -1029,6 +1041,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
     draftsByThreadKey,
     frozenActive,
     props.routeDraftId,
+    props.scopedEnvironmentId,
     props.scopedProjectKeys,
   ]);
   if (drafts.length === 0) {
@@ -2569,6 +2582,45 @@ export default function Sidebar() {
   // fresh clock whenever it recomputes.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
 
+  // Environment scope: a select above search once two or more environments
+  // are enabled. Persisted next to the project scope. It narrows the project
+  // groups first, so the project scope only offers and resolves projects that
+  // live on the chosen environment.
+  const environmentScopeId = useUiStateStore((store) => store.sidebarEnvironmentScopeId);
+  const setEnvironmentScopeId = useUiStateStore((store) => store.setSidebarEnvironmentScopeId);
+  const environmentConnectionSummaries = useEnvironmentConnectionSummaries();
+  const environmentScopeOptions = useMemo(
+    () => buildSidebarEnvironmentScopeOptions(environmentConnectionSummaries),
+    [environmentConnectionSummaries],
+  );
+  const selectedEnvironmentScope = useMemo(
+    () =>
+      environmentScopeOptions.find((option) => option.environmentId === environmentScopeId) ?? null,
+    [environmentScopeId, environmentScopeOptions],
+  );
+  const scopedEnvironmentId = selectedEnvironmentScope?.environmentId ?? null;
+  // A stored environment that was removed or switched off reads as every
+  // environment at once, and is dropped once the saved catalog has loaded.
+  const environmentCatalogReady = useEnvironmentCatalogReady();
+  useEffect(() => {
+    if (
+      environmentScopeId !== null &&
+      environmentCatalogReady &&
+      selectedEnvironmentScope === null
+    ) {
+      setEnvironmentScopeId(null);
+    }
+  }, [
+    environmentCatalogReady,
+    environmentScopeId,
+    selectedEnvironmentScope,
+    setEnvironmentScopeId,
+  ]);
+  const environmentScopedProjectGroups = useMemo(
+    () => narrowSidebarProjectGroupsToEnvironment(projectGroups, scopedEnvironmentId),
+    [projectGroups, scopedEnvironmentId],
+  );
+
   // Project scope: one menu above the list. Scoping filters the list without
   // making the header width depend on the number or length of project names.
   // The selection lives in the persisted UI store next to the other sidebar
@@ -2581,12 +2633,12 @@ export default function Sidebar() {
   const projectScopeItems = useMemo(
     () => [
       { value: "all", label: "All projects" },
-      ...projectGroups.map((project) => ({
+      ...environmentScopedProjectGroups.map((project) => ({
         value: project.projectKey,
         label: project.displayName,
       })),
     ],
-    [projectGroups],
+    [environmentScopedProjectGroups],
   );
   // Same-named projects on two machines are only told apart by where they
   // live, so rows on another machine carry its icon once the catalog spans
@@ -2630,8 +2682,10 @@ export default function Sidebar() {
     () =>
       projectScopeKey === null
         ? null
-        : (projectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
-    [projectGroups, projectScopeKey],
+        : (environmentScopedProjectGroups.find(
+            (project) => project.projectKey === projectScopeKey,
+          ) ?? null),
+    [environmentScopedProjectGroups, projectScopeKey],
   );
   const scopedProjectKeys = useMemo(
     () =>
@@ -2669,6 +2723,9 @@ export default function Sidebar() {
       if (!composerDraftHasUserContent(store.draftsByThreadKey[draftKey])) {
         continue;
       }
+      if (scopedEnvironmentId !== null && session.environmentId !== scopedEnvironmentId) {
+        continue;
+      }
       if (
         scopedProjectKeys !== null &&
         !scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
@@ -2683,7 +2740,7 @@ export default function Sidebar() {
   // hidden now, and bulk actions must never count or touch invisible rows.
   useEffect(() => {
     clearSelection();
-  }, [clearSelection, projectScopeKey]);
+  }, [clearSelection, projectScopeKey, scopedEnvironmentId]);
 
   const openProjectSettings = useCallback(
     (projectGroup: SidebarProjectSnapshot) => {
@@ -2752,7 +2809,7 @@ export default function Sidebar() {
     const preciseNow = new Date().toISOString();
     // Subagent child threads live in the parent's Agents surface, not the
     // sidebar roster (v2 models them as real threads with lineage).
-    const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys);
+    const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys, scopedEnvironmentId);
     inboxReturns.observe(workingShelfEnabled ? threads : null);
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
@@ -2855,6 +2912,7 @@ export default function Sidebar() {
   }, [
     nowMinute,
     optimisticDrop,
+    scopedEnvironmentId,
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
@@ -2876,7 +2934,15 @@ export default function Sidebar() {
     ],
     [activeThreads, pinnedThreads, settledThreads, snoozedThreads, workingThreads],
   );
-  const searchEnvironmentIds = useConnectedEnvironmentIds();
+  const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  // A scoped sidebar only shows that environment's hits, so only it is asked.
+  const searchEnvironmentIds = useMemo(
+    () =>
+      scopedEnvironmentId === null
+        ? connectedEnvironmentIds
+        : connectedEnvironmentIds.filter((environmentId) => environmentId === scopedEnvironmentId),
+    [connectedEnvironmentIds, scopedEnvironmentId],
+  );
   // useThreadSearch owns the debounce and the two-character floor.
   const threadSearch = useThreadSearch(searchEnvironmentIds, threadSearchQuery);
   const threadSearchMatchByKey = useMemo(
@@ -2931,7 +2997,7 @@ export default function Sidebar() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = projectScopeKey ?? "all";
+  const settledResetKey = `${scopedEnvironmentId ?? "all"}\0${projectScopeKey ?? "all"}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -4955,7 +5021,15 @@ export default function Sidebar() {
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
-          <SidebarGroup className="z-[1]">
+          <SidebarGroup className="z-[1] gap-1">
+            {environmentScopeOptions.length > 0 ? (
+              <SidebarEnvironmentSelect
+                options={environmentScopeOptions}
+                selected={selectedEnvironmentScope}
+                machineById={environmentMachineById}
+                onChange={setEnvironmentScopeId}
+              />
+            ) : null}
             <SidebarThreadHeader
               searchFieldRef={headerSearchRef}
               hasProjects={projectGroups.length > 0}
@@ -5368,6 +5442,7 @@ export default function Sidebar() {
                           projectByKey={projectByKey}
                           projectDisplayNameByKey={projectDisplayNameByKey}
                           scopedProjectKeys={scopedProjectKeys}
+                          scopedEnvironmentId={scopedEnvironmentId}
                           routeDraftId={routeDraftIdForRows}
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}

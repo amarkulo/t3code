@@ -572,11 +572,16 @@ export function filterSidebarV2VisibleThreads<
     environmentId: string;
     projectId: string;
   },
->(threads: readonly T[], scopedProjectKeys: ReadonlySet<string> | null): T[] {
+>(
+  threads: readonly T[],
+  scopedProjectKeys: ReadonlySet<string> | null,
+  scopedEnvironmentId: string | null = null,
+): T[] {
   return threads.filter(
     (thread) =>
       thread.archivedAt === null &&
       !isSidebarSubagentThread(thread) &&
+      (scopedEnvironmentId === null || thread.environmentId === scopedEnvironmentId) &&
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
@@ -1118,6 +1123,52 @@ export function filterSidebarProjectScopeItems<TItem extends { readonly value: s
   const query = input.query.trim();
   if (query.length === 0) return input.items;
   return input.items.filter((item) => item.value !== "all" && input.matches(item, query));
+}
+
+export interface SidebarEnvironmentScopeOption {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly offline: boolean;
+}
+
+// Not "available" or "reconnecting": those pass through on every startup and
+// blip, and a scope that flickers "Offline" would read as broken.
+const SIDEBAR_UNREACHABLE_CONNECTION_STATES: ReadonlySet<string> = new Set([
+  "offline",
+  "error",
+  "unsupported",
+]);
+
+/**
+ * Environments the sidebar can be scoped to: every enabled one, in catalog
+ * order. Empty while fewer than two are enabled, which hides the control so a
+ * single-machine sidebar stays as it was.
+ */
+export function buildSidebarEnvironmentScopeOptions(
+  environments: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly environmentLabel: string;
+    readonly isEnabled: boolean;
+    readonly connectionState: string;
+  }>,
+): SidebarEnvironmentScopeOption[] {
+  const enabled = environments.filter((environment) => environment.isEnabled);
+  if (enabled.length < 2) return [];
+  return enabled.map((environment) => ({
+    environmentId: environment.environmentId,
+    label: environment.environmentLabel,
+    offline: SIDEBAR_UNREACHABLE_CONNECTION_STATES.has(environment.connectionState),
+  }));
+}
+
+/** Project groups with a member on the environment; every group when unscoped. */
+export function narrowSidebarProjectGroupsToEnvironment<
+  TGroup extends { readonly memberProjectRefs: ReadonlyArray<{ readonly environmentId: string }> },
+>(groups: readonly TGroup[], environmentId: string | null): readonly TGroup[] {
+  if (environmentId === null) return groups;
+  return groups.filter((group) =>
+    group.memberProjectRefs.some((projectRef) => projectRef.environmentId === environmentId),
+  );
 }
 
 export interface SidebarProjectScopeMenuState {

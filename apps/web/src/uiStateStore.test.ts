@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -13,6 +13,7 @@ import {
   resolveProjectExpanded,
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
+  setSidebarEnvironmentScopeId,
   setSidebarProjectScopeKey,
   setThreadChangedFilesExpanded,
   type UiState,
@@ -23,6 +24,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectExpandedById: {},
     projectOrder: [],
     sidebarProjectScopeKey: null,
+    sidebarEnvironmentScopeId: null,
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
@@ -156,6 +158,15 @@ describe("uiStateStore pure functions", () => {
     expect(setSidebarProjectScopeKey(scoped, null).sidebarProjectScopeKey).toBeNull();
     expect(setSidebarProjectScopeKey(scoped, "").sidebarProjectScopeKey).toBeNull();
   });
+
+  it("stores the sidebar environment scope and resets it to all environments", () => {
+    const environmentId = EnvironmentId.make("environment-home");
+    const scoped = setSidebarEnvironmentScopeId(makeUiState(), environmentId);
+
+    expect(scoped.sidebarEnvironmentScopeId).toBe(environmentId);
+    expect(setSidebarEnvironmentScopeId(scoped, environmentId)).toBe(scoped);
+    expect(setSidebarEnvironmentScopeId(scoped, null).sidebarEnvironmentScopeId).toBeNull();
+  });
 });
 
 describe("parsePersistedState", () => {
@@ -202,6 +213,7 @@ describe("parsePersistedState", () => {
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKey: null,
+      sidebarEnvironmentScopeId: null,
       pullRequestMergeMethod: "merge",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
@@ -324,6 +336,7 @@ describe("uiStateStore persistence", () => {
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKey: null,
+      sidebarEnvironmentScopeId: null,
       threadChangedFilesExpansionVersion: 2,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
@@ -348,6 +361,27 @@ describe("uiStateStore persistence", () => {
     expect(parsePersistedState(persisted).sidebarProjectScopeKey).toBe(
       "github.com/pingdotgg/t3code",
     );
+  });
+
+  it("restores the sidebar environment scope across reloads", () => {
+    const environmentId = EnvironmentId.make("environment-work");
+    persistState(makeUiState({ sidebarEnvironmentScopeId: environmentId }));
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+
+    expect(parsePersistedState(persisted).sidebarEnvironmentScopeId).toBe(environmentId);
+  });
+
+  it("reads a malformed sidebar environment scope as all environments", () => {
+    expect(
+      parsePersistedState({ sidebarEnvironmentScopeId: 42 } as never).sidebarEnvironmentScopeId,
+    ).toBeNull();
+    expect(
+      parsePersistedState({ sidebarEnvironmentScopeId: "" }).sidebarEnvironmentScopeId,
+    ).toBeNull();
+    expect(parsePersistedState({}).sidebarEnvironmentScopeId).toBeNull();
   });
 
   it("drops the temporary expanded-only migration fallback when rewriting state", () => {

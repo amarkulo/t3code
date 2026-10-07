@@ -9,6 +9,7 @@ import {
   animateSidebarLayoutChanges,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
+  buildSidebarEnvironmentScopeOptions,
   buildBulkUnpinContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
@@ -25,6 +26,7 @@ import {
   isSidebarSubagentThread,
   isSidebarThreadWorking,
   isTrailingDoubleClick,
+  narrowSidebarProjectGroupsToEnvironment,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   reduceSidebarProjectScopeMenuState,
@@ -444,6 +446,34 @@ describe("sidebar thread lineage helpers", () => {
         new Set([`${environmentId}:${projectId}`]),
       ).map((thread) => thread.id),
     ).toEqual([parentId, fork.id]);
+  });
+
+  it("keeps only the scoped environment's threads, alone or with a project scope", () => {
+    const homeId = EnvironmentId.make("environment-home");
+    const workId = EnvironmentId.make("environment-work");
+    const projectId = ProjectId.make("project-shared");
+    const home = makeThreadFixture({
+      id: ThreadId.make("thread-home"),
+      environmentId: homeId,
+      projectId,
+    });
+    const work = makeThreadFixture({
+      id: ThreadId.make("thread-work"),
+      environmentId: workId,
+      projectId,
+    });
+    const sharedProjectKeys = new Set([`${homeId}:${projectId}`, `${workId}:${projectId}`]);
+
+    expect(filterSidebarV2VisibleThreads([home, work], null, workId).map((t) => t.id)).toEqual([
+      work.id,
+    ]);
+    expect(
+      filterSidebarV2VisibleThreads([home, work], sharedProjectKeys, homeId).map((t) => t.id),
+    ).toEqual([home.id]);
+    expect(filterSidebarV2VisibleThreads([home, work], null, null).map((t) => t.id)).toEqual([
+      home.id,
+      work.id,
+    ]);
   });
 
   it("identifies subagent threads so the sidebar can hide them", () => {
@@ -2314,5 +2344,55 @@ describe("Working shelf (beta)", () => {
         unsnooze: false,
       });
     });
+  });
+});
+
+describe("sidebar environment scope", () => {
+  const homeId = EnvironmentId.make("environment-home");
+  const workId = EnvironmentId.make("environment-work");
+  const environment = (
+    environmentId: EnvironmentId,
+    overrides: Partial<{ isEnabled: boolean; connectionState: string }> = {},
+  ) => ({
+    environmentId,
+    environmentLabel: environmentId,
+    isEnabled: true,
+    connectionState: "connected",
+    ...overrides,
+  });
+
+  it("offers nothing until two environments are enabled, so the control stays hidden", () => {
+    expect(buildSidebarEnvironmentScopeOptions([environment(homeId)])).toEqual([]);
+    expect(
+      buildSidebarEnvironmentScopeOptions([
+        environment(homeId),
+        environment(workId, { isEnabled: false }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("lists enabled environments in catalog order and marks unreachable ones offline", () => {
+    expect(
+      buildSidebarEnvironmentScopeOptions([
+        environment(homeId, { connectionState: "available" }),
+        environment(EnvironmentId.make("environment-off"), { isEnabled: false }),
+        environment(workId, { connectionState: "offline" }),
+      ]),
+    ).toEqual([
+      { environmentId: homeId, label: homeId, offline: false },
+      { environmentId: workId, label: workId, offline: true },
+    ]);
+  });
+
+  it("narrows project groups to those with a member on the environment", () => {
+    const homeOnly = { projectKey: "home", memberProjectRefs: [{ environmentId: homeId }] };
+    const shared = {
+      projectKey: "shared",
+      memberProjectRefs: [{ environmentId: homeId }, { environmentId: workId }],
+    };
+    const groups = [homeOnly, shared];
+
+    expect(narrowSidebarProjectGroupsToEnvironment(groups, workId)).toEqual([shared]);
+    expect(narrowSidebarProjectGroupsToEnvironment(groups, null)).toBe(groups);
   });
 });
